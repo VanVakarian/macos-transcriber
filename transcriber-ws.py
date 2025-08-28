@@ -9,7 +9,7 @@ from pynput import keyboard
 import pyaudio
 import numpy as np
 import websocket
-from env import OPEN_AI_KEY, OPENAI_MODEL, CHUNK_SIZE_MS
+from env import OPEN_AI_KEY, OPENAI_MODEL_WS, CHUNK_SIZE_MS
 from Quartz.CoreGraphics import (
     CGEventCreateKeyboardEvent,
     CGEventPost,
@@ -21,7 +21,7 @@ from Quartz.CoreGraphics import (
 class AudioTranscriber:
     def __init__(self):
         self.OPENAI_API_KEY = OPEN_AI_KEY
-        self.OPENAI_MODEL = OPENAI_MODEL
+        self.OPENAI_MODEL_WS = OPENAI_MODEL_WS
         self.CHUNK_SIZE_MS = CHUNK_SIZE_MS
 
         self.CHUNK = 1024
@@ -95,7 +95,7 @@ class AudioTranscriber:
             raise Exception(f"Audio initialization error: {e}")
 
     def init_websocket(self):
-        url = f"wss://api.openai.com/v1/realtime?model={self.OPENAI_MODEL}"
+        url = f"wss://api.openai.com/v1/realtime?model={self.OPENAI_MODEL_WS}"
         headers = [
             f"Authorization: Bearer {self.OPENAI_API_KEY}",
             "OpenAI-Beta: realtime=v1"
@@ -251,7 +251,7 @@ class AudioTranscriber:
         if self.recording_start_time:
             recording_duration = time.time() - self.recording_start_time
 
-        print(f"🟢 Recording stopped ({recording_duration:.1f}s)")
+        print(f"🚫 Recording stopped ({recording_duration:.1f}s)")
         self.play_stop_sound()
 
         try:
@@ -299,20 +299,10 @@ class AudioTranscriber:
         if key in self.current_modifiers:
             self.current_modifiers.remove(key)
 
-        if key == keyboard.Key.esc:
-            print("\n👋 Exiting...")
-            try:
-                if self.is_recording:
-                    self.stop_recording()
-                self.cleanup()
-            except Exception as e:
-                print(f"❌ Exit error: {e}")
-            return False
-
     def start_listening(self):
-        print(f"🎹 Готов к работе (модель: {self.OPENAI_MODEL})")
+        print(f"🎹 Готов к работе (модель: {self.OPENAI_MODEL_WS})")
         print("   Option + Command + Space - начать/остановить транскрипцию")
-        print("   Esc - выход")
+        print("   Ctrl+C - выход")
         print()
 
         with keyboard.Listener(
