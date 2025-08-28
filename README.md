@@ -11,7 +11,8 @@ A real-time audio transcription tool for macOS that supports both OpenAI's Realt
 - 📋 **Auto-paste**: Automatically inserts transcribed text into the active application
 - 🔊 **Audio Feedback**: System sounds for recording start/stop notifications
 - 🎯 **Voice Activity Detection**: Smart detection of speech vs. silence
-- ⚙️ **Configurable**: Customizable VAD threshold, silence duration, and model settings
+- ⏰ **Auto-stop**: Automatically stops recording after configurable silence timeout
+- ⚙️ **Configurable**: Customizable VAD threshold, silence duration, auto-stop timeout, and model settings
 - 🛡️ **Error Handling**: Robust error management and resource cleanup
 
 ## Available Scripts
@@ -31,6 +32,7 @@ A real-time audio transcription tool for macOS that supports both OpenAI's Realt
 - **HTTP Requests**: Standard REST API calls
 - **Local VAD**: Client-side voice activity detection
 - **Smart Buffering**: Accumulates speech and sends complete phrases
+- **Ordered Insertion**: Ensures transcribed text appears in chronological order
 - **Model Flexibility**: Supports whisper-1, gpt-4o-transcribe, gpt-4o-mini-transcribe
 
 ### Common Technologies
@@ -76,7 +78,8 @@ OPENAI_MODEL_REQ = "whisper-1"  # or "gpt-4o-transcribe" or "gpt-4o-mini-transcr
 VAD_THRESHOLD = 500
 SILENCE_DURATION = 1.5
 AUDIO_LENGTH_MIN = 0.5
-AUDIO_LENGTH_MAX = 30.0
+AUDIO_LENGTH_MAX = 30
+AUTO_STOP_TIMEOUT = 30  # Auto-stop after 30s of silence, set to 0 to disable
 ```
 
 ## Usage
@@ -93,6 +96,7 @@ python transcriber-req.py
 
 ### Controls
 - Press `Option+Command+Space` to start/stop recording
+- Recording automatically stops after configured silence timeout (if enabled)
 - The transcribed text will be automatically pasted into the active application
 - Press `Ctrl+C` in terminal to exit the program
 
@@ -103,6 +107,7 @@ python transcriber-req.py
 - **SILENCE_DURATION**: Seconds of silence before sending audio (default: 1.5s)
 - **AUDIO_LENGTH_MIN**: Minimum audio length to process (default: 0.5s)
 - **AUDIO_LENGTH_MAX**: Maximum audio length before auto-send (default: 30.0s)
+- **AUTO_STOP_TIMEOUT**: Seconds of total silence before auto-stopping recording (optimal: 30, set to 0 to disable)
 
 ## Audio Settings
 
@@ -117,6 +122,8 @@ python transcriber-req.py
 - **Format**: PCM16 (16-bit)
 - **Channels**: Mono
 - **VAD-based Processing**: Only sends audio when speech is detected
+- **Auto-stop Feature**: Configurable automatic recording termination after silence
+- **Ordered Insertion Queue**: Results inserted in chronological order regardless of API response timing
 - **Multiple Models**: Supports whisper-1, gpt-4o-transcribe, gpt-4o-mini-transcribe
 
 ## System Requirements
