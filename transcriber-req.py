@@ -5,6 +5,7 @@ import time
 import subprocess
 import wave
 import queue
+import logging
 from collections import deque
 from datetime import datetime
 from pynput import keyboard
@@ -22,7 +23,8 @@ from env import (
     CONTEXT_CHUNKS_COUNT,
     ENABLE_CONTEXT,
     SOUND_MODE,
-    PRE_RECORD_MS
+    PRE_RECORD_MS,
+    DEBUG_LOGS
 )
 from Quartz.CoreGraphics import (
     CGEventCreateKeyboardEvent,
@@ -34,6 +36,10 @@ from Quartz.CoreGraphics import (
 
 class WhisperTranscriber:
     def __init__(self):
+        level = logging.DEBUG if DEBUG_LOGS else logging.INFO
+        logging.basicConfig(level=level, format='%(message)s')
+        self.logger = logging.getLogger(__name__)
+
         self.OPENAI_API_KEY = OPEN_AI_KEY
 
         self.CHUNK = 1024
@@ -169,15 +175,15 @@ class WhisperTranscriber:
                 context_prompt = " ".join(self.completed_transcriptions[-self.CONTEXT_CHUNKS_COUNT:]) if self.ENABLE_CONTEXT else ""
 
                 if context_prompt:
-                    print(f"📝 {chunk_id} sending context to API:")
-                    print(f"   \"{context_prompt}\"")
+                    self.logger.debug(f"📝 {chunk_id} sending context to API:")
+                    self.logger.debug(f"   \"{context_prompt}\"")
                 else:
-                    print(f"📝 {chunk_id} no context available")
+                    self.logger.debug(f"📝 {chunk_id} no context available")
 
                 text = self.transcribe_audio(audio_data, chunk_id, context_prompt)
 
                 if text and text.strip():
-                    print(f"✨ Inserting {chunk_id}: \"{text[:30]}{'...' if len(text) > 30 else ''}\"")
+                    self.logger.info(f"{text}")
                     self.insert_transcription(text + " ")
                     self.on_transcription_complete(chunk_id, text)
 
@@ -186,7 +192,7 @@ class WhisperTranscriber:
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"❌ Transcription worker error: {e}")
+                self.logger.error(f"❌ Transcription worker error: {e}")
                 time.sleep(0.1)
 
     def detect_voice_activity(self, audio_data):
@@ -210,7 +216,7 @@ class WhisperTranscriber:
             return rms > self.VAD_THRESHOLD
 
         except Exception as e:
-            print(f"⚠️ VAD error: {e}")
+            self.logger.warning(f"⚠️ VAD error: {e}")
             return False
 
     def transcribe_audio(self, audio_data, chunk_id, context_prompt):
@@ -225,7 +231,7 @@ class WhisperTranscriber:
 
             audio_io.seek(0)
 
-            print(f"🌐 Sending {chunk_id} to API")
+            self.logger.debug(f"🌐 Sending {chunk_id} to API")
             self.play_transcribe_sound()
 
             files = {
@@ -251,17 +257,17 @@ class WhisperTranscriber:
             if response.status_code == 200:
                 transcript = response.text.strip()
                 if transcript:
-                    print(f"✅ Completed {chunk_id}: \"{transcript[:50]}{'...' if len(transcript) > 50 else ''}\"")
+                    self.logger.debug(f"✅ Completed {chunk_id}: \"{transcript[:50]}{'...' if len(transcript) > 50 else ''}\"")
                     return transcript
                 else:
-                    print(f"⚠️ Empty transcription for {chunk_id}")
+                    self.logger.debug(f"⚠️ Empty transcription for {chunk_id}")
                     return ""
             else:
-                print(f"❌ API error for {chunk_id}: {response.status_code} - {response.text}")
+                self.logger.error(f"❌ API error for {chunk_id}: {response.status_code} - {response.text}")
                 return ""
 
         except Exception as e:
-            print(f"❌ Transcription error for {chunk_id}: {e}")
+            self.logger.error(f"❌ Transcription error for {chunk_id}: {e}")
             return ""
 
     def start_recording(self):
@@ -285,7 +291,7 @@ class WhisperTranscriber:
             self.recording_start_time = time.time()
             self.total_silence_start = time.time()
 
-            print(f"🔴 Recording started (VAD threshold: {self.VAD_THRESHOLD})")
+            self.logger.info(f"🔴 Recording started (VAD threshold: {self.VAD_THRESHOLD})")
             self.play_start_sound()
 
             recording_thread = threading.Thread(target=self.record_audio)
@@ -293,7 +299,7 @@ class WhisperTranscriber:
             recording_thread.start()
 
         except Exception as e:
-            print(f"❌ Recording start error: {e}")
+            self.logger.error(f"❌ Recording start error: {e}")
             self.is_recording = False
 
     def record_audio(self):
@@ -310,7 +316,7 @@ class WhisperTranscriber:
 
                 if has_voice:
                     if not self.is_speech_detected:
-                        print("🗣️ Voice detected")
+                        self.logger.debug("🗣️ Voice detected")
                         self.is_speech_detected = True
 
                         # Add pre-recorded chunks to main buffer
@@ -337,18 +343,18 @@ class WhisperTranscriber:
                 if not self.is_speech_detected and self.AUTO_STOP_TIMEOUT > 0:
                     total_silence_duration = current_time - self.total_silence_start
                     if total_silence_duration >= self.AUTO_STOP_TIMEOUT:
-                        print(f"⏰ Auto-stopping after {self.AUTO_STOP_TIMEOUT}s of silence")
+                        self.logger.debug(f"⏰ Auto-stopping after {self.AUTO_STOP_TIMEOUT}s of silence")
                         self.stop_recording()
                         break
 
                 if self.is_speech_detected:
                     buffer_duration = len(self.audio_buffer) / self.RATE
                     if buffer_duration >= self.AUDIO_LENGTH_MAX:
-                        print(f"⏰ Maximum length reached ({self.AUDIO_LENGTH_MAX}s)")
+                        self.logger.debug(f"⏰ Maximum length reached ({self.AUDIO_LENGTH_MAX}s)")
                         self.process_audio_buffer()
 
             except Exception as e:
-                print(f"❌ Recording error: {e}")
+                self.logger.error(f"❌ Recording error: {e}")
                 break
 
     def process_audio_buffer(self):
@@ -361,7 +367,7 @@ class WhisperTranscriber:
             chunk_id = f"chunk_{self.chunk_counter:03d}"
             self.chunk_counter += 1
 
-            print(f"🎯 Created {chunk_id} ({buffer_duration:.1f}s)")
+            self.logger.debug(f"🎯 Created {chunk_id} ({buffer_duration:.1f}s)")
 
             audio_data = np.array(self.audio_buffer, dtype=np.int16).tobytes()
 
@@ -372,7 +378,7 @@ class WhisperTranscriber:
 
             self.chunk_queue.put(chunk_data)
         else:
-            print(f"⚠️ Audio too short ({buffer_duration:.1f}s)")
+            self.logger.debug(f"⚠️ Audio too short ({buffer_duration:.1f}s)")
 
         self.audio_buffer = []
         self.silence_counter = 0
@@ -388,7 +394,7 @@ class WhisperTranscriber:
         if self.recording_start_time:
             recording_duration = time.time() - self.recording_start_time
 
-        print(f"🚫 Recording stopped ({recording_duration:.1f}s)")
+        self.logger.info(f"🚫 Recording stopped ({recording_duration:.1f}s)")
 
         if self.audio_buffer:
             self.process_audio_buffer()
@@ -401,7 +407,7 @@ class WhisperTranscriber:
                 self.stream.close()
                 self.stream = None
         except Exception as e:
-            print(f"❌ Audio closing error: {e}")
+            self.logger.error(f"❌ Audio closing error: {e}")
 
     def on_press(self, key):
         if key in {keyboard.Key.cmd, keyboard.Key.alt}:
@@ -420,14 +426,14 @@ class WhisperTranscriber:
             self.current_modifiers.remove(key)
 
     def start_listening(self):
-        print(f"🎹 Audio Transcriber ready (model: {self.OPENAI_MODEL_REQ})")
+        self.logger.info(f"🎹 Audio Transcriber ready (model: {self.OPENAI_MODEL_REQ})")
         auto_stop_status = f"{self.AUTO_STOP_TIMEOUT}s" if self.AUTO_STOP_TIMEOUT > 0 else "disabled"
         context_status = f"{self.CONTEXT_CHUNKS_COUNT} chunks" if self.CONTEXT_CHUNKS_COUNT > 0 and self.ENABLE_CONTEXT else "disabled"
-        print(f"   VAD threshold: {self.VAD_THRESHOLD} | Silence: {self.SILENCE_DURATION}s | Auto-stop: {auto_stop_status}")
-        print(f"   Context prompts: {context_status} | Sound mode: {self.SOUND_MODE}")
-        print("   Option + Command + Space - start/stop recording")
-        print("   Ctrl+C - exit")
-        print()
+        self.logger.info(f"   VAD threshold: {self.VAD_THRESHOLD} | Silence: {self.SILENCE_DURATION}s | Auto-stop: {auto_stop_status}")
+        self.logger.info(f"   Context prompts: {context_status} | Sound mode: {self.SOUND_MODE}")
+        self.logger.info("   Option + Command + Space - start/stop recording")
+        self.logger.info("   Ctrl+C - exit")
+        self.logger.info("")
 
         with keyboard.Listener(
             on_press=self.on_press,
@@ -436,11 +442,11 @@ class WhisperTranscriber:
             try:
                 listener.join()
             except KeyboardInterrupt:
-                print("\n👋 Program terminated")
+                self.logger.info("\n👋 Program terminated")
                 try:
                     self.cleanup()
                 except Exception as e:
-                    print(f"❌ Cleanup error: {e}")
+                    self.logger.error(f"❌ Cleanup error: {e}")
 
     def cleanup(self):
         self.worker_running = False
@@ -449,7 +455,7 @@ class WhisperTranscriber:
             if self.is_recording:
                 self.stop_recording()
         except Exception as e:
-            print(f"❌ Recording stop error: {e}")
+            self.logger.error(f"❌ Recording stop error: {e}")
 
         try:
             if self.stream:
@@ -457,16 +463,16 @@ class WhisperTranscriber:
                 self.stream.close()
                 self.stream = None
         except Exception as e:
-            print(f"❌ Stream closing error: {e}")
+            self.logger.error(f"❌ Stream closing error: {e}")
 
         try:
             if self.audio:
                 self.audio.terminate()
                 self.audio = None
         except Exception as e:
-            print(f"❌ PyAudio termination error: {e}")
+            self.logger.error(f"❌ PyAudio termination error: {e}")
 
-        print("⏳ Waiting for pending transcriptions...")
+        self.logger.info("⏳ Waiting for pending transcriptions...")
         self.chunk_queue.put(None)
         time.sleep(1)
 
