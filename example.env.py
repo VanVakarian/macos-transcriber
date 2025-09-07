@@ -20,6 +20,6 @@ AUTO_STOP_TIMEOUT = 30    # Automatically stop recording after this many seconds
 ENABLE_CONTEXT = False    # Enable/disable sending context prompt to Whisper API
 CONTEXT_CHUNKS_COUNT = 3  # Number of previous transcriptions to use as context for Whisper prompt
 
-SOUND_MODE = 'basic'      # Sound playback mode: 'none' - no sounds, 'basic' - start/stop only, 'all' - all sounds
+SOUND_MODE = 'start-stop' # Sound playback mode: 'none' - no sounds, 'start-stop' - start/stop only, 'all' - all sounds
 
 DEBUG_LOGS = False        # Enable/disable debug logging

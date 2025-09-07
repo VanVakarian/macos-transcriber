@@ -6,12 +6,15 @@ import subprocess
 import wave
 import queue
 import logging
+import winsound
 from collections import deque
 from datetime import datetime
 from pynput import keyboard
 import pyaudio
 import numpy as np
 import requests
+import pyperclip
+import pyautogui
 from env import (
     OPEN_AI_KEY,
     OPENAI_MODEL_REQ,
@@ -25,13 +28,6 @@ from env import (
     SOUND_MODE,
     PRE_RECORD_MS,
     DEBUG_LOGS
-)
-from Quartz.CoreGraphics import (
-    CGEventCreateKeyboardEvent,
-    CGEventPost,
-    CGEventSetFlags,
-    kCGHIDEventTap,
-    kCGEventFlagMaskCommand
 )
 
 class WhisperTranscriber:
@@ -89,39 +85,53 @@ class WhisperTranscriber:
         self.start_transcription_worker()
 
     def copy_to_clipboard(self, text):
-        subprocess.run("pbcopy", text=True, input=text)
-
-    def press_cmd_v_applescript(self):
-        applescript = 'tell application "System Events" to keystroke "v" using command down'
-        subprocess.run(["osascript", "-e", applescript])
-
-    def press_cmd_v(self):
         try:
-            v_keycode = 9
-            event_down = CGEventCreateKeyboardEvent(None, v_keycode, True)
-            event_up = CGEventCreateKeyboardEvent(None, v_keycode, False)
-            CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
-            CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
-            CGEventPost(kCGHIDEventTap, event_down)
-            CGEventPost(kCGHIDEventTap, event_up)
+            pyperclip.copy(text)
+        except Exception as e:
+            self.logger.error(f"❌ Clipboard error: {e}")
+
+    def press_ctrl_v_pyautogui(self):
+        try:
+            pyautogui.hotkey('ctrl', 'v')
             return True
-        except:
+        except Exception as e:
+            self.logger.error(f"❌ Hotkey error: {e}")
+            return False
+
+    def press_ctrl_v_sendkeys(self):
+        try:
+            import win32api
+            import win32con
+
+            # Press Ctrl
+            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+            # Press V
+            win32api.keybd_event(ord('V'), 0, 0, 0)
+            # Release V
+            win32api.keybd_event(ord('V'), 0, win32con.KEYEVENTF_KEYUP, 0)
+            # Release Ctrl
+            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+            return True
+        except ImportError:
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ SendKeys error: {e}")
             return False
 
     def insert_transcription(self, text):
         self.copy_to_clipboard(text)
         time.sleep(0.1)
-        if not self.press_cmd_v():
-            self.press_cmd_v_applescript()
+        if not self.press_ctrl_v_pyautogui():
+            self.press_ctrl_v_sendkeys()
 
     def play_start_sound(self):
         if self.SOUND_MODE == 'none':
             return
         try:
-            subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
+            winsound.PlaySound("SystemStart", winsound.SND_ALIAS | winsound.SND_ASYNC)
         except:
             try:
-                subprocess.run(["say", "-v", "Alex", "Recording"], check=False)
+                winsound.Beep(800, 200)
             except:
                 pass
 
@@ -129,10 +139,10 @@ class WhisperTranscriber:
         if self.SOUND_MODE == 'none':
             return
         try:
-            subprocess.run(["afplay", "/System/Library/Sounds/Submarine.aiff"], check=False)
+            winsound.PlaySound("SystemExit", winsound.SND_ALIAS | winsound.SND_ASYNC)
         except:
             try:
-                subprocess.run(["say", "-v", "Alex", "Stopped"], check=False)
+                winsound.Beep(400, 300)
             except:
                 pass
 
@@ -140,9 +150,12 @@ class WhisperTranscriber:
         if self.SOUND_MODE in ['none', 'start-stop']:
             return
         try:
-            subprocess.run(["afplay", "/System/Library/Sounds/Ping.aiff"], check=False)
+            winsound.PlaySound("SystemNotification", winsound.SND_ALIAS | winsound.SND_ASYNC)
         except:
-            pass
+            try:
+                winsound.Beep(1000, 100)
+            except:
+                pass
 
     def init_audio(self):
         try:
@@ -410,11 +423,11 @@ class WhisperTranscriber:
             self.logger.error(f"❌ Audio closing error: {e}")
 
     def on_press(self, key):
-        if key in {keyboard.Key.cmd, keyboard.Key.alt}:
+        if key in {keyboard.Key.ctrl, keyboard.Key.alt}:
             self.current_modifiers.add(key)
 
         if (key == keyboard.Key.space and
-            self.current_modifiers == {keyboard.Key.cmd, keyboard.Key.alt}):
+            self.current_modifiers == {keyboard.Key.ctrl, keyboard.Key.alt}):
 
             if not self.is_recording:
                 self.start_recording()
@@ -431,7 +444,7 @@ class WhisperTranscriber:
         context_status = f"{self.CONTEXT_CHUNKS_COUNT} chunks" if self.CONTEXT_CHUNKS_COUNT > 0 and self.ENABLE_CONTEXT else "disabled"
         self.logger.info(f"   VAD threshold: {self.VAD_THRESHOLD} | Silence: {self.SILENCE_DURATION}s | Auto-stop: {auto_stop_status}")
         self.logger.info(f"   Context prompts: {context_status} | Sound mode: {self.SOUND_MODE}")
-        self.logger.info("   Option + Command + Space - start/stop recording")
+        self.logger.info("   Ctrl + Alt + Space - start/stop recording")
         self.logger.info("   Ctrl+C - exit")
         self.logger.info("")
 
@@ -477,7 +490,7 @@ class WhisperTranscriber:
         time.sleep(1)
 
 def main():
-    print("🎤 Whisper Transcriber")
+    print("🎤 Whisper Transcriber (Windows)")
     print("=" * 40)
 
     transcriber = None

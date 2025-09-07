@@ -10,15 +10,15 @@ Voice-to-text console background python app for macOS. Records speech and automa
   - Audio API for cost-effective batch processing
 - 📋 **Auto-paste**: Automatically inserts transcribed text into the active application
 - 🔊 **Audio Feedback**: System sounds for recording start/stop notifications
-- � **Smart Audio Modes**: Configurable sound feedback (none/basic/all)
-- �🎯 **Voice Activity Detection**: Smart detection of speech vs. silence
+- 🎵 **Smart Audio Modes**: Configurable sound feedback (none/start-stop/all)
+- 🎤 **Voice Activity Detection**: Smart detection of speech vs. silence
 - 🧠 **Context-aware Transcription**: Uses previous transcriptions to improve accuracy
 - 📼 **Pre-recording Buffer**: Captures speech start for better accuracy
 - ⏰ **Auto-stop**: Automatically stops recording after configurable silence timeout
 - ⚡ **Async Processing**: Non-blocking transcription with worker threads
 - ⚙️ **Configurable**: Customizable VAD threshold, silence duration, auto-stop timeout, and model settings
-- � **Smart Logging**: Configurable logging levels (normal/debug) for clean output
-- �🛡️ **Error Handling**: Robust error management and resource cleanup
+- 🎛️ **Smart Logging**: Configurable logging levels (normal/debug) for clean output
+- 🛡️ **Error Handling**: Robust error management and resource cleanup
 
 ## Quick Start
 
@@ -80,8 +80,8 @@ SILENCE_DURATION = 1
 # Auto-stops listening after N seconds of silence (seconds, 0 = disable)
 AUTO_STOP_TIMEOUT = 30
 
-# Sound notifications: 'none', 'basic', 'all'
-SOUND_MODE = 'basic'
+# Sound notifications: 'none', 'start-stop', 'all'
+SOUND_MODE = 'start-stop'
 
 # Debug logs: True for detailed output
 DEBUG_LOGS = False
