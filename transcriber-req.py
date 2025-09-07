@@ -4,6 +4,8 @@ import threading
 import time
 import subprocess
 import wave
+import queue
+from collections import deque
 from datetime import datetime
 from pynput import keyboard
 import pyaudio
@@ -16,7 +18,11 @@ from env import (
     SILENCE_DURATION,
     AUDIO_LENGTH_MIN,
     AUDIO_LENGTH_MAX,
-    AUTO_STOP_TIMEOUT
+    AUTO_STOP_TIMEOUT,
+    CONTEXT_CHUNKS_COUNT,
+    ENABLE_CONTEXT,
+    SOUND_MODE,
+    PRE_RECORD_MS
 )
 from Quartz.CoreGraphics import (
     CGEventCreateKeyboardEvent,
@@ -40,12 +46,23 @@ class WhisperTranscriber:
         self.AUDIO_LENGTH_MIN = AUDIO_LENGTH_MIN
         self.AUDIO_LENGTH_MAX = AUDIO_LENGTH_MAX
         self.AUTO_STOP_TIMEOUT = AUTO_STOP_TIMEOUT
+        self.CONTEXT_CHUNKS_COUNT = CONTEXT_CHUNKS_COUNT
+        self.ENABLE_CONTEXT = ENABLE_CONTEXT
+        self.SOUND_MODE = SOUND_MODE if SOUND_MODE in ['none', 'basic', 'all'] else 'all'
+        self.PRE_RECORD_MS = PRE_RECORD_MS
+
+        # Calculate pre-recording buffer size (number of chunks)
+        chunk_duration_ms = (self.CHUNK / self.RATE) * 1000  # ~64ms per chunk
+        self.pre_record_chunks = max(1, int(self.PRE_RECORD_MS / chunk_duration_ms))
 
         self.is_recording = False
         self.audio = None
         self.stream = None
         self.current_modifiers = set()
         self.recording_start_time = None
+
+        # Pre-recording circular buffer
+        self.pre_record_buffer = deque(maxlen=self.pre_record_chunks)
 
         self.audio_buffer = []
         self.silence_counter = 0
@@ -54,16 +71,16 @@ class WhisperTranscriber:
 
         self.OPENAI_MODEL_REQ = OPENAI_MODEL_REQ
 
-        self.chunks_registry = {}
+        self.chunk_queue = queue.Queue()
         self.chunk_counter = 0
-        self.registry_lock = threading.Lock()
-        self.insertion_worker_running = False
+        self.completed_transcriptions = []
+        self.worker_running = False
 
         if not self.OPENAI_API_KEY:
             raise ValueError("OPEN_AI_KEY not found in env.py file")
 
         self.init_audio()
-        self.start_insertion_worker()
+        self.start_transcription_worker()
 
     def copy_to_clipboard(self, text):
         subprocess.run("pbcopy", text=True, input=text)
@@ -92,6 +109,8 @@ class WhisperTranscriber:
             self.press_cmd_v_applescript()
 
     def play_start_sound(self):
+        if self.SOUND_MODE == 'none':
+            return
         try:
             subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
         except:
@@ -101,6 +120,8 @@ class WhisperTranscriber:
                 pass
 
     def play_stop_sound(self):
+        if self.SOUND_MODE == 'none':
+            return
         try:
             subprocess.run(["afplay", "/System/Library/Sounds/Submarine.aiff"], check=False)
         except:
@@ -110,6 +131,8 @@ class WhisperTranscriber:
                 pass
 
     def play_transcribe_sound(self):
+        if self.SOUND_MODE in ['none', 'basic']:
+            return
         try:
             subprocess.run(["afplay", "/System/Library/Sounds/Ping.aiff"], check=False)
         except:
@@ -122,77 +145,49 @@ class WhisperTranscriber:
             raise Exception(f"Audio initialization error: {e}")
 
     def on_transcription_complete(self, chunk_id, text):
-        with self.registry_lock:
-            if chunk_id in self.chunks_registry:
-                self.chunks_registry[chunk_id]["status"] = "completed"
-                self.chunks_registry[chunk_id]["text"] = text
-                self.chunks_registry[chunk_id]["completed_at"] = time.time()
+        if text.strip():
+            self.completed_transcriptions.append(text)
+            if len(self.completed_transcriptions) > self.CONTEXT_CHUNKS_COUNT:
+                self.completed_transcriptions.pop(0)
 
-    def start_insertion_worker(self):
-        self.insertion_worker_running = True
-        worker_thread = threading.Thread(target=self.insertion_worker)
+    def start_transcription_worker(self):
+        self.worker_running = True
+        worker_thread = threading.Thread(target=self.transcription_worker)
         worker_thread.daemon = True
         worker_thread.start()
 
-    def insertion_worker(self):
-        while self.insertion_worker_running:
+    def transcription_worker(self):
+        while self.worker_running:
             try:
-                chunk_to_insert = self.find_next_chunk_to_insert()
+                chunk_data = self.chunk_queue.get(timeout=0.1)
+                if chunk_data is None:
+                    break
 
-                if chunk_to_insert:
-                    chunk_id = chunk_to_insert["id"]
-                    text = chunk_to_insert["text"]
+                chunk_id = chunk_data["id"]
+                audio_data = chunk_data["audio_data"]
 
-                    if text.strip():
-                        print(f"✨ Inserting {chunk_id}: \"{text[:30]}{'...' if len(text) > 30 else ''}\"")
-                        self.insert_transcription(text + " ")
+                context_prompt = " ".join(self.completed_transcriptions[-self.CONTEXT_CHUNKS_COUNT:]) if self.ENABLE_CONTEXT else ""
 
-                    with self.registry_lock:
-                        if chunk_id in self.chunks_registry:
-                            del self.chunks_registry[chunk_id]
-
-                    time.sleep(0.1)
+                if context_prompt:
+                    print(f"📝 {chunk_id} sending context to API:")
+                    print(f"   \"{context_prompt}\"")
                 else:
-                    time.sleep(0.05)
+                    print(f"📝 {chunk_id} no context available")
 
+                text = self.transcribe_audio(audio_data, chunk_id, context_prompt)
+
+                if text and text.strip():
+                    print(f"✨ Inserting {chunk_id}: \"{text[:30]}{'...' if len(text) > 30 else ''}\"")
+                    self.insert_transcription(text + " ")
+                    self.on_transcription_complete(chunk_id, text)
+
+                self.chunk_queue.task_done()
+
+            except queue.Empty:
+                continue
             except Exception as e:
-                print(f"❌ Insertion worker error: {e}")
+                print(f"❌ Transcription worker error: {e}")
                 time.sleep(0.1)
-
-    def find_next_chunk_to_insert(self):
-        with self.registry_lock:
-            if not self.chunks_registry:
-                return None
-
-            ready_chunks = {
-                chunk_id: data for chunk_id, data in self.chunks_registry.items()
-                if data["status"] == "completed"
-            }
-
-            if not ready_chunks:
-                return None
-
-            earliest_ready = min(ready_chunks.items(), key=lambda x: x[1]["record_timestamp"])
-            earliest_id, earliest_data = earliest_ready
-
-            if self.can_insert_safely(earliest_data):
-                return {
-                    "id": earliest_id,
-                    "text": earliest_data["text"],
-                    "timestamp": earliest_data["record_timestamp"]
-                }
-
-            return None
-
-    def can_insert_safely(self, chunk_data):
-        target_timestamp = chunk_data["record_timestamp"]
-
-        for other_data in self.chunks_registry.values():
-            if (other_data["record_timestamp"] < target_timestamp and
-                other_data["status"] == "processing"):
-                return False
-
-        return True
 
     def detect_voice_activity(self, audio_data):
         try:
@@ -218,7 +213,7 @@ class WhisperTranscriber:
             print(f"⚠️ VAD error: {e}")
             return False
 
-    def transcribe_audio(self, audio_data, chunk_id):
+    def transcribe_audio(self, audio_data, chunk_id, context_prompt):
         try:
             audio_io = io.BytesIO()
 
@@ -230,7 +225,7 @@ class WhisperTranscriber:
 
             audio_io.seek(0)
 
-            print(f"� Sending {chunk_id} to API")
+            print(f"🌐 Sending {chunk_id} to API")
             self.play_transcribe_sound()
 
             files = {
@@ -238,6 +233,9 @@ class WhisperTranscriber:
                 'model': (None, self.OPENAI_MODEL_REQ),
                 'response_format': (None, 'text'),
             }
+
+            if context_prompt:
+                files['prompt'] = (None, context_prompt)
 
             headers = {
                 'Authorization': f'Bearer {self.OPENAI_API_KEY}'
@@ -253,18 +251,18 @@ class WhisperTranscriber:
             if response.status_code == 200:
                 transcript = response.text.strip()
                 if transcript:
-                    print(f"� Completed {chunk_id}: \"{transcript[:50]}{'...' if len(transcript) > 50 else ''}\"")
-                    self.on_transcription_complete(chunk_id, transcript)
+                    print(f"✅ Completed {chunk_id}: \"{transcript[:50]}{'...' if len(transcript) > 50 else ''}\"")
+                    return transcript
                 else:
                     print(f"⚠️ Empty transcription for {chunk_id}")
-                    self.on_transcription_complete(chunk_id, "")
+                    return ""
             else:
                 print(f"❌ API error for {chunk_id}: {response.status_code} - {response.text}")
-                self.on_transcription_complete(chunk_id, "")
+                return ""
 
         except Exception as e:
             print(f"❌ Transcription error for {chunk_id}: {e}")
-            self.on_transcription_complete(chunk_id, "")
+            return ""
 
     def start_recording(self):
         if self.is_recording:
@@ -303,6 +301,10 @@ class WhisperTranscriber:
             try:
                 data = self.stream.read(self.CHUNK, exception_on_overflow=False)
                 current_time = time.time()
+                audio_chunk = np.frombuffer(data, dtype=np.int16)
+
+                # Always add to pre-recording buffer
+                self.pre_record_buffer.append(audio_chunk)
 
                 has_voice = self.detect_voice_activity(data)
 
@@ -311,14 +313,20 @@ class WhisperTranscriber:
                         print("🗣️ Voice detected")
                         self.is_speech_detected = True
 
+                        # Add pre-recorded chunks to main buffer
+                        for pre_chunk in self.pre_record_buffer:
+                            self.audio_buffer.extend(pre_chunk)
+                    else:
+                        # Already recording, just add current chunk
+                        self.audio_buffer.extend(audio_chunk)
+
                     self.last_speech_time = current_time
                     self.silence_counter = 0
                     self.total_silence_start = current_time
-                    self.audio_buffer.extend(np.frombuffer(data, dtype=np.int16))
 
                 elif self.is_speech_detected:
                     self.silence_counter += 1
-                    self.audio_buffer.extend(np.frombuffer(data, dtype=np.int16))
+                    self.audio_buffer.extend(audio_chunk)
 
                     silence_duration = self.silence_counter * self.CHUNK / self.RATE
 
@@ -351,27 +359,18 @@ class WhisperTranscriber:
 
         if buffer_duration >= self.AUDIO_LENGTH_MIN:
             chunk_id = f"chunk_{self.chunk_counter:03d}"
-            record_timestamp = time.time()
+            self.chunk_counter += 1
 
-            with self.registry_lock:
-                self.chunks_registry[chunk_id] = {
-                    "record_timestamp": record_timestamp,
-                    "status": "processing",
-                    "text": None,
-                    "completed_at": None
-                }
-                self.chunk_counter += 1
-
-            print(f"🎯 Created {chunk_id} ({buffer_duration:.1f}s, ts: {record_timestamp:.3f})")
+            print(f"🎯 Created {chunk_id} ({buffer_duration:.1f}s)")
 
             audio_data = np.array(self.audio_buffer, dtype=np.int16).tobytes()
 
-            transcribe_thread = threading.Thread(
-                target=self.transcribe_audio,
-                args=(audio_data, chunk_id)
-            )
-            transcribe_thread.daemon = True
-            transcribe_thread.start()
+            chunk_data = {
+                "id": chunk_id,
+                "audio_data": audio_data
+            }
+
+            self.chunk_queue.put(chunk_data)
         else:
             print(f"⚠️ Audio too short ({buffer_duration:.1f}s)")
 
@@ -423,7 +422,9 @@ class WhisperTranscriber:
     def start_listening(self):
         print(f"🎹 Audio Transcriber ready (model: {self.OPENAI_MODEL_REQ})")
         auto_stop_status = f"{self.AUTO_STOP_TIMEOUT}s" if self.AUTO_STOP_TIMEOUT > 0 else "disabled"
+        context_status = f"{self.CONTEXT_CHUNKS_COUNT} chunks" if self.CONTEXT_CHUNKS_COUNT > 0 and self.ENABLE_CONTEXT else "disabled"
         print(f"   VAD threshold: {self.VAD_THRESHOLD} | Silence: {self.SILENCE_DURATION}s | Auto-stop: {auto_stop_status}")
+        print(f"   Context prompts: {context_status} | Sound mode: {self.SOUND_MODE}")
         print("   Option + Command + Space - start/stop recording")
         print("   Ctrl+C - exit")
         print()
@@ -442,7 +443,7 @@ class WhisperTranscriber:
                     print(f"❌ Cleanup error: {e}")
 
     def cleanup(self):
-        self.insertion_worker_running = False
+        self.worker_running = False
 
         try:
             if self.is_recording:
@@ -466,12 +467,8 @@ class WhisperTranscriber:
             print(f"❌ PyAudio termination error: {e}")
 
         print("⏳ Waiting for pending transcriptions...")
-        wait_start = time.time()
-        while self.chunks_registry and (time.time() - wait_start) < 5:
-            time.sleep(0.1)
-
-        if self.chunks_registry:
-            print(f"⚠️ {len(self.chunks_registry)} transcriptions didn't complete")
+        self.chunk_queue.put(None)
+        time.sleep(1)
 
 def main():
     print("🎤 Whisper Transcriber")
